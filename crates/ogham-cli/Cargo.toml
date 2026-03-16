@@ -11,4 +11,12 @@ rust-version.workspace = true
 keywords = ["ogham", "schema", "cli", "compiler", "codegen"]
 categories = ["command-line-utilities", "development-tools"]
 
+[[bin]]
+name = "ogham"
+path = "src/main.rs"
+
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+ogham-compiler = { path = "../ogham-compiler" }
+ogham-proto = { path = "../ogham-proto" }
+prost = { version = "0.14", features = ["derive"] }

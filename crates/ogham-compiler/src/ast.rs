@@ -766,6 +766,12 @@ impl TypeRef {
     pub fn qualified_name(&self) -> Option<QualifiedName> {
         first_child_of_type(&self.syntax)
     }
+
+    /// Type arguments for generic instantiation (e.g., `Paginated<User>` → `[User]`).
+    /// Returns child TypeRef nodes (the generic type arguments).
+    pub fn type_args(&self) -> Vec<TypeRef> {
+        children_of_type(&self.syntax)
+    }
 }
 
 ast_node!(ArrayType, ArrayType);
