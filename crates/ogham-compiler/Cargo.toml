@@ -1,6 +1,16 @@
 [package]
 name = "ogham-compiler"
-version = "0.1.0"
-edition = "2021"
+description = "Ogham schema language compiler — lexer, parser, type checker, and AST"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+keywords = ["ogham", "schema", "compiler", "parser", "lexer"]
+categories = ["compilers", "parser-implementations"]
 
 [dependencies]
+logos = "0.16"
+rowan = "0.15"

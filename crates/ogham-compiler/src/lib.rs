@@ -1,16 +1,6 @@
-//! Ogham compiler entry points: parsing, imports, and semantic analysis.
+//! Ogham compiler: lexer, parser, type checker, linter, and AST → IR lowering.
 
-/// Returns the crate identifier.
-pub fn crate_id() -> &'static str {
-    "ogham-compiler"
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn crate_id_is_stable() {
-        assert_eq!(crate_id(), "ogham-compiler");
-    }
-}
+pub mod lexer;
+pub mod syntax_kind;
+pub mod parser;
+pub mod ast;

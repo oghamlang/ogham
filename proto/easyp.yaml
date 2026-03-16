@@ -24,4 +24,4 @@ generate:
         gen_crate: ./assets/Cargo.toml.tmpl
 breaking:
   ignore: []
-  against_git_ref: master
+  against_git_ref: main
