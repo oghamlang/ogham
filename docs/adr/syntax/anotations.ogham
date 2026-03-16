@@ -1,0 +1,68 @@
+package example;
+
+/*
+    CODE: Annotation placement rules.
+    Annotations can be placed on any target declared in annotation's "for" clause.
+
+    Proto mapping by target:
+    - shape     → proto: MessageOptions (propagates to message where shape is injected)
+    - type      → proto: MessageOptions
+    - field     → proto: FieldOptions
+    - oneof     → proto: OneofOptions
+    - oneof_field → proto: FieldOptions
+    - enum      → proto: EnumOptions
+    - enum_value → proto: EnumValueOptions
+    - service   → proto: ServiceOptions
+    - rpc       → proto: MethodOptions
+*/
+
+@<library>::<annotation_name>(
+    // here params from annotation schema defined in library annotation block
+)
+shape ExampleShape {
+    @<library>::<annotation_name>(
+        // here params from annotation schema defined in library annotation block
+    )
+    string example_field;
+}
+
+@<library>::<annotation_name>(
+    // here params from annotation schema defined in library annotation block
+)
+type ExampleType {
+    @<library>::<annotation_name>(
+        // here params from annotation schema defined in library annotation block
+    )
+    string example_field = 1;
+    @<library>::<annotation_name>(
+        // here params from annotation schema defined in library annotation block
+    )
+    oneof example_oneof {
+        @<library>::<annotation_name>(
+            // here params from annotation schema defined in library annotation block
+        )
+        string example_oneof_field = 1;
+    }
+}
+
+
+@<library>::<annotation_name>(
+    // here params from annotation schema defined in library annotation block
+)
+enum ExampleEnum {
+    @<library>::<annotation_name>(
+        // here params from annotation schema defined in library annotation block
+    )
+    Value1 = 1;
+    Value2 = 2;
+}
+
+@<library>::<annotation_name>(
+    // here params from annotation schema defined in library annotation block
+)
+service ExampleService {
+    @<library>::<annotation_name>(
+        // here params from annotation schema defined in library annotation block
+    )
+    rpc ExampleContract(ExampleType) -> ExampleType;
+}
