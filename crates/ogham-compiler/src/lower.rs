@@ -59,6 +59,50 @@ impl<'a> Ctx<'a> {
         self.interner.resolve(s).to_string()
     }
 
+    fn inflate_annotations(&self, annotations: &[crate::hir::AnnotationCall]) -> Vec<ir::AnnotationCall> {
+        annotations
+            .iter()
+            .map(|ann| ir::AnnotationCall {
+                library: self.sym(ann.library),
+                name: self.sym(ann.name),
+                arguments: ann
+                    .arguments
+                    .iter()
+                    .map(|arg| ir::AnnotationArgument {
+                        name: self.sym(arg.name),
+                        value: Some(self.inflate_literal(&arg.value)),
+                    })
+                    .collect(),
+                definition: None,
+                location: None,
+            })
+            .collect()
+    }
+
+    fn inflate_literal(&self, value: &LiteralValue) -> ir::AnnotationLiteral {
+        use ir::annotation_literal::Value;
+        let v = match value {
+            LiteralValue::String(s) => Value::StringValue(self.sym(*s)),
+            LiteralValue::Int(i) => Value::IntValue(*i),
+            LiteralValue::Float(f) => Value::FloatValue(*f),
+            LiteralValue::Bool(b) => Value::BoolValue(*b),
+            LiteralValue::Ident(s) => Value::StringValue(self.sym(*s)),
+            LiteralValue::Struct(fields) => {
+                let map = fields
+                    .iter()
+                    .map(|(k, v)| (self.sym(*k), self.inflate_literal(v)))
+                    .collect();
+                Value::StructValue(ir::AnnotationStruct { fields: map })
+            }
+            LiteralValue::List(items) => {
+                Value::ListValue(ir::AnnotationList {
+                    values: items.iter().map(|v| self.inflate_literal(v)).collect(),
+                })
+            }
+        };
+        ir::AnnotationLiteral { value: Some(v) }
+    }
+
     fn inflate_type(&mut self, id: TypeId) -> ir::Type {
         let ty = &self.arenas.types[id];
         ir::Type {
@@ -76,7 +120,7 @@ impl<'a> Ctx<'a> {
                 .iter()
                 .map(|&id| self.inflate_enum(id))
                 .collect(),
-            annotations: Vec::new(),
+            annotations: self.inflate_annotations(&ty.annotations),
             back_references: ty
                 .back_references
                 .iter()
@@ -104,7 +148,7 @@ impl<'a> Ctx<'a> {
             r#type: Some(self.inflate_resolved_type(&f.ty)),
             is_optional: f.is_optional,
             is_repeated: f.is_repeated,
-            annotations: Vec::new(),
+            annotations: self.inflate_annotations(&f.annotations),
             mapping: f.mapping.as_ref().map(|m| self.inflate_mapping(m)),
             trace: f.trace.as_ref().map(|t| self.inflate_field_trace(t)),
             location: None,
@@ -121,12 +165,12 @@ impl<'a> Ctx<'a> {
                     name: self.sym(f.name),
                     number: f.number,
                     r#type: Some(self.inflate_resolved_type(&f.ty)),
-                    annotations: Vec::new(),
+                    annotations: self.inflate_annotations(&f.annotations),
                     mapping: f.mapping.as_ref().map(|m| self.inflate_mapping(m)),
                     location: None,
                 })
                 .collect(),
-            annotations: Vec::new(),
+            annotations: self.inflate_annotations(&o.annotations),
             location: None,
         }
     }
@@ -144,11 +188,11 @@ impl<'a> Ctx<'a> {
                     number: v.number,
                     is_removed: v.is_removed,
                     fallback: v.fallback.map(|s| self.sym(s)).unwrap_or_default(),
-                    annotations: Vec::new(),
+                    annotations: self.inflate_annotations(&v.annotations),
                     location: None,
                 })
                 .collect(),
-            annotations: Vec::new(),
+            annotations: self.inflate_annotations(&e.annotations),
             location: None,
         }
     }
@@ -165,11 +209,11 @@ impl<'a> Ctx<'a> {
                     name: self.sym(r.name),
                     input: Some(self.inflate_rpc_param(&r.input)),
                     output: Some(self.inflate_rpc_param(&r.output)),
-                    annotations: Vec::new(),
+                    annotations: self.inflate_annotations(&r.annotations),
                     location: None,
                 })
                 .collect(),
-            annotations: Vec::new(),
+            annotations: self.inflate_annotations(&svc.annotations),
             location: None,
         }
     }
@@ -195,30 +239,30 @@ impl<'a> Ctx<'a> {
             }),
             ResolvedType::Message(id) => {
                 if self.depth >= MAX_DEPTH {
-                    // Prevent infinite recursion for recursive types
                     let t = &self.arenas.types[*id];
+                    let anns = self.inflate_annotations(&t.annotations);
                     Kind::MessageType(ir::MessageType {
                         name: self.sym(t.name),
                         full_name: self.sym(t.full_name),
                         fields: Vec::new(),
                         oneofs: Vec::new(),
                         nested_enums: Vec::new(),
-                        annotations: Vec::new(),
+                        annotations: anns,
                     })
                 } else {
                     self.depth += 1;
                     let t = &self.arenas.types[*id];
+                    let anns = self.inflate_annotations(&t.annotations);
+                    let fields: Vec<_> = t.fields.iter().map(|f| self.inflate_field(f)).collect();
+                    let oneofs: Vec<_> = t.oneofs.iter().map(|o| self.inflate_oneof(o)).collect();
+                    let nested_enums: Vec<_> = t.nested_enums.iter().map(|&eid| self.inflate_enum(eid)).collect();
                     let msg = ir::MessageType {
                         name: self.sym(t.name),
                         full_name: self.sym(t.full_name),
-                        fields: t.fields.iter().map(|f| self.inflate_field(f)).collect(),
-                        oneofs: t.oneofs.iter().map(|o| self.inflate_oneof(o)).collect(),
-                        nested_enums: t
-                            .nested_enums
-                            .iter()
-                            .map(|&id| self.inflate_enum(id))
-                            .collect(),
-                        annotations: Vec::new(),
+                        fields,
+                        oneofs,
+                        nested_enums,
+                        annotations: anns,
                     };
                     self.depth -= 1;
                     Kind::MessageType(msg)
@@ -237,7 +281,7 @@ impl<'a> Ctx<'a> {
                             number: v.number,
                             is_removed: v.is_removed,
                             fallback: v.fallback.map(|s| self.sym(s)).unwrap_or_default(),
-                            annotations: Vec::new(),
+                            annotations: self.inflate_annotations(&v.annotations),
                             location: None,
                         })
                         .collect(),

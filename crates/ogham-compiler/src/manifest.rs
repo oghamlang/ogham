@@ -24,6 +24,22 @@ pub struct ModFile {
     pub replace: HashMap<String, ReplaceEntry>,
     #[serde(default)]
     pub plugin: Option<PluginSection>,
+    #[serde(default)]
+    pub breaking: Option<BreakingSection>,
+}
+
+/// Breaking change detection configuration.
+#[derive(Debug, Deserialize, Clone)]
+pub struct BreakingSection {
+    /// Reference to compare against: "git:main", "git:v1.0.0", "./path/"
+    pub against: String,
+    /// Policy: "off", "warn", "error"
+    #[serde(default = "default_breaking_policy")]
+    pub policy: String,
+}
+
+fn default_breaking_policy() -> String {
+    "warn".to_string()
 }
 
 /// A dependency entry — can be a version string or a detailed spec.
@@ -248,5 +264,34 @@ generate:
 "#;
         let g: GenFile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(g.generate.plugins[0].grpc.as_deref(), Some("localhost:50051"));
+    }
+
+    #[test]
+    fn parse_mod_file_with_breaking() {
+        let yaml = r#"
+module: github.com/myteam/myproject
+version: 0.1.0
+breaking:
+  against: git:main
+  policy: error
+"#;
+        let m: ModFile = serde_yaml::from_str(yaml).unwrap();
+        let b = m.breaking.unwrap();
+        assert_eq!(b.against, "git:main");
+        assert_eq!(b.policy, "error");
+    }
+
+    #[test]
+    fn parse_mod_file_breaking_default_policy() {
+        let yaml = r#"
+module: github.com/myteam/myproject
+version: 0.1.0
+breaking:
+  against: git:v1.0.0
+"#;
+        let m: ModFile = serde_yaml::from_str(yaml).unwrap();
+        let b = m.breaking.unwrap();
+        assert_eq!(b.against, "git:v1.0.0");
+        assert_eq!(b.policy, "warn");
     }
 }

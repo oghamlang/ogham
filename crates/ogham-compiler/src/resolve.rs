@@ -7,6 +7,111 @@ use crate::ast::{self, AstNode};
 use crate::diagnostics::Diagnostics;
 use crate::hir::*;
 use crate::index::ParsedFile;
+// ── AST annotation → HIR annotation conversion ────────────────────────
+
+fn collect_annotation_calls(
+    annotations: &[ast::AnnotationCall],
+    interner: &mut Interner,
+) -> Vec<AnnotationCall> {
+    annotations
+        .iter()
+        .map(|ann| {
+            if ann.is_builtin() {
+                let name_text = ann
+                    .builtin_name()
+                    .map(|t| t.text().to_string())
+                    .unwrap_or_default();
+                let name_sym = interner.intern(&name_text);
+                let empty_sym = interner.intern("");
+
+                let arguments = ann
+                    .args()
+                    .map(|args| collect_annotation_args(&args, interner))
+                    .unwrap_or_default();
+
+                AnnotationCall {
+                    library: empty_sym,
+                    name: name_sym,
+                    arguments,
+                    definition: None,
+                    loc: Loc::default(),
+                }
+            } else {
+                let (lib, name) = ann.library_name().unwrap_or_default();
+                let lib_sym = interner.intern(&lib);
+                let name_sym = interner.intern(&name);
+
+                let arguments = ann
+                    .args()
+                    .map(|args| collect_annotation_args(&args, interner))
+                    .unwrap_or_default();
+
+                AnnotationCall {
+                    library: lib_sym,
+                    name: name_sym,
+                    arguments,
+                    definition: None,
+                    loc: Loc::default(),
+                }
+            }
+        })
+        .collect()
+}
+
+fn collect_annotation_args(
+    args: &ast::AnnotationArgs,
+    interner: &mut Interner,
+) -> Vec<AnnotationArgDef> {
+    args.args()
+        .iter()
+        .map(|arg| {
+            let name_text = arg
+                .name()
+                .map(|t| t.text().to_string())
+                .unwrap_or_default();
+            let name_sym = interner.intern(&name_text);
+
+            let value = arg
+                .value()
+                .map(|v| parse_annotation_value(&v, interner))
+                .unwrap_or(LiteralValue::Bool(false));
+
+            AnnotationArgDef {
+                name: name_sym,
+                value,
+            }
+        })
+        .collect()
+}
+
+fn parse_annotation_value(value: &ast::AnnotationValue, interner: &mut Interner) -> LiteralValue {
+    // Extract the text content of the value node
+    let text = value.syntax().text().to_string();
+    let text = text.trim();
+
+    // Try parsing as different literal types
+    if let Some(stripped) = text.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        return LiteralValue::String(interner.intern(stripped));
+    }
+    if text == "true" {
+        return LiteralValue::Bool(true);
+    }
+    if text == "false" {
+        return LiteralValue::Bool(false);
+    }
+    if text == "now" {
+        return LiteralValue::Ident(interner.intern("now"));
+    }
+    if let Ok(i) = text.parse::<i64>() {
+        return LiteralValue::Int(i);
+    }
+    if let Ok(f) = text.parse::<f64>() {
+        return LiteralValue::Float(f);
+    }
+    // Fallback: treat as identifier
+    LiteralValue::Ident(interner.intern(text))
+}
+
 // ── Pass 3+4: Populate fields + resolve type references ────────────────
 
 /// Populate type fields, shape fields, oneofs, rpcs from AST and resolve
@@ -94,10 +199,11 @@ pub fn populate_and_resolve(
                         .type_ref()
                         .map(|tr| resolve_type_ref(&tr, interner, pkg, &imports, symbols, diag, &file.file_name))
                         .unwrap_or(ResolvedType::Error);
+                    let annotations = collect_annotation_calls(&f.annotations(), interner);
                     Some(ShapeFieldDef {
                         name: interner.intern(&name),
                         ty,
-                        annotations: Vec::new(),
+                        annotations,
                         loc: Loc::default(),
                     })
                 })
@@ -141,11 +247,12 @@ pub fn populate_and_resolve(
                             is_stream: false,
                             ty: ResolvedType::Error,
                         });
+                    let annotations = collect_annotation_calls(&rpc.annotations(), interner);
                     Some(RpcDef {
                         name: interner.intern(&name),
                         input,
                         output,
-                        annotations: Vec::new(),
+                        annotations,
                         loc: Loc::default(),
                     })
                 })
@@ -218,13 +325,15 @@ fn collect_fields(
                 }
             });
 
+            let annotations = collect_annotation_calls(&f.annotations(), interner);
+
             Some(FieldDef {
                 name: interner.intern(&name),
                 number,
                 ty,
                 is_optional,
                 is_repeated,
-                annotations: Vec::new(),
+                annotations,
                 mapping,
                 trace: None,
                 loc: Loc::default(),
@@ -268,21 +377,23 @@ fn collect_oneofs(
                         }
                     });
 
+                    let annotations = collect_annotation_calls(&f.annotations(), interner);
                     Some(OneofFieldDef {
                         name: interner.intern(&fname),
                         number,
                         ty,
-                        annotations: Vec::new(),
+                        annotations,
                         mapping,
                         loc: Loc::default(),
                     })
                 })
                 .collect();
 
+            let oneof_annotations = collect_annotation_calls(&o.annotations(), interner);
             Some(OneofDef {
                 name: interner.intern(&name),
                 fields,
-                annotations: Vec::new(),
+                annotations: oneof_annotations,
                 loc: Loc::default(),
             })
         })

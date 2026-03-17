@@ -5,6 +5,8 @@ members = [
     "crates/ogham-core",
     "crates/ogham-lsp",
     "crates/ogham-proto",
+    "crates/oghamgen",
+    "crates/ogham-gen-proto",
 ]
 resolver = "2"
 

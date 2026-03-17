@@ -162,7 +162,7 @@ The `.proto` files are the **single source of truth** for the IR. Generated code
 
 | SDK | Package |
 |-----|---------|
-| Rust | `ogham-plugin-sdk` (crates.io) |
+| Rust | `oghamgen` (crates.io) |
 | Go | `github.com/oghamlang/ogham/go/oghamgen` |
 | TypeScript | `@ogham/oghamgen` |
 
@@ -215,3 +215,67 @@ func main() {
 | AST (Rust internals) | Internal | May change between compiler minor versions |
 
 Adding a new IR feature to `.proto` automatically propagates to all SDKs after regeneration. CI validates all languages on every change.
+
+## Plugin Transport
+
+Plugins can run in three modes. The plugin binary itself is transport-agnostic — it reads `OghamCompileRequest` and writes `OghamCompileResponse`. The `ogham` CLI handles the transport.
+
+| Mode | Config | How it works |
+|------|--------|-------------|
+| **stdin/stdout** | `name:` in ogham.gen.yaml | CLI spawns the binary, sends protobuf via stdin, reads response from stdout |
+| **gRPC client** | `grpc: host:port` in ogham.gen.yaml | CLI calls `OghamPluginAPI.Compile` on a remote server |
+| **gRPC server** | Separate server binary | Wraps a plugin as a gRPC server for remote clients |
+
+### Example: ogham.gen.yaml with mixed transports
+
+```yaml
+generate:
+  plugins:
+    # Local binary via stdin/stdout
+    - name: github.com/org/ogham-gen-go
+      out: gen/go/
+
+    # Remote plugin via gRPC
+    - name: github.com/org/ogham-gen-db
+      grpc: localhost:50051
+      out: gen/db/
+
+    # Local binary path
+    - path: ./tools/my-plugin
+      out: gen/custom/
+```
+
+## Planned: WebAssembly Plugins
+
+A future transport mode will allow plugins compiled to WebAssembly (WASI) to run inside the compiler process — no subprocess spawn, no network, fully sandboxed.
+
+### Motivation
+
+- **Distribution**: a single `.wasm` file instead of per-platform binaries. `ogham get` downloads the wasm, no `cargo install` or `go install` needed.
+- **Startup**: no process spawn overhead. Plugins execute in-process via a wasm runtime (wasmtime/wasmer). Useful when running many plugins or in CI.
+- **Sandboxing**: wasm plugins have no filesystem/network access by default. The compiler controls what the plugin can read/write via WASI capabilities.
+- **Portability**: one build runs on Linux, macOS, Windows, ARM — anywhere the ogham compiler runs.
+
+### Planned design
+
+```yaml
+# ogham.gen.yaml — wasm plugin
+generate:
+  plugins:
+    - name: github.com/org/ogham-gen-go
+      wasm: true          # use wasm instead of native binary
+      out: gen/go/
+```
+
+The plugin protocol stays the same — `OghamCompileRequest` → `OghamCompileResponse` serialized as protobuf. The wasm module exports a `compile(ptr, len) -> (ptr, len)` function that receives the request bytes and returns response bytes.
+
+Plugin authors compile to `wasm32-wasip1` (Rust) or `GOOS=wasip1 GOARCH=wasm` (Go) and publish the `.wasm` file alongside (or instead of) native binaries.
+
+### Transport priority
+
+When a plugin is resolved, the compiler will check in order:
+
+1. `grpc:` — call remote gRPC server
+2. `wasm: true` — run wasm in-process (when implemented)
+3. `path:` — run local binary via stdin/stdout
+4. `name:` — resolve binary name, run via stdin/stdout

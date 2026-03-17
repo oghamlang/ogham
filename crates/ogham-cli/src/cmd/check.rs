@@ -1,9 +1,10 @@
-use crate::cli::BreakingArgs;
+//! `ogham check` — validate schemas, compile without running plugins.
 
-pub fn run_breaking(args: BreakingArgs) -> Result<(), String> {
-    eprintln!(
-        "ogham check breaking --against {} (allow={}, force={})",
-        args.against, args.allow, args.force
-    );
-    Err("not implemented yet".to_string())
+use crate::cli::CheckArgs;
+use crate::cmd::generate::compile_project;
+
+pub fn run(args: CheckArgs) -> Result<(), String> {
+    let (_module, _result) = compile_project(&args.dir)?;
+    eprintln!("check passed");
+    Ok(())
 }

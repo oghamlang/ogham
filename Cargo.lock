@@ -636,6 +636,9 @@ dependencies = [
  "ogham-compiler",
  "ogham-proto",
  "prost",
+ "serde_json",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]
@@ -657,6 +660,13 @@ name = "ogham-core"
 version = "0.1.0"
 
 [[package]]
+name = "ogham-gen-proto"
+version = "0.1.0"
+dependencies = [
+ "oghamgen",
+]
+
+[[package]]
 name = "ogham-lsp"
 version = "0.1.0"
 
@@ -670,6 +680,16 @@ dependencies = [
  "serde",
  "tonic",
  "tonic-prost",
+]
+
+[[package]]
+name = "oghamgen"
+version = "0.1.0"
+dependencies = [
+ "ogham-proto",
+ "prost",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

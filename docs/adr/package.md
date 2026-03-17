@@ -296,6 +296,9 @@ Ogham uses **Minimal Version Selection (MVS)**:
 ## CLI Commands
 
 ```bash
+# Validate
+ogham check                                    # compile and validate schemas
+
 # Dependencies
 ogham get github.com/org/database             # add dependency
 ogham get github.com/org/database@2.1.0       # specific version
@@ -305,16 +308,10 @@ ogham vendor                                   # copy to vendor/
 
 # Generation
 ogham generate                                 # run all plugins from ogham.gen.yaml
-ogham generate --plugin=database               # run single plugin
+ogham generate --plugin=proto                  # run single plugin
 
-# Proto export
-ogham proto export ./proto/                    # export .proto files for external toolchains
-
-# Plugin development
-ogham init --plugin <name>                     # scaffold a new plugin
-
-# Remote plugins
-ogham serve --plugin <name> --address :50051   # serve plugin as gRPC
+# Breaking changes
+ogham breaking --against git:main              # detect breaking changes
 ```
 
 ## Full Example

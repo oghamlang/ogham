@@ -40,30 +40,111 @@ These changes break wire format. Existing clients will fail to deserialize.
 
 ## Breaking Change Detection
 
-The compiler has built-in breaking change detection. It compares the current schema against a previous version and reports violations.
-
-### Usage
+### Standalone command
 
 ```bash
 # Compare against a git ref
-ogham check breaking --against git:main
-ogham check breaking --against git:v1.0.0
-ogham check breaking --against git:abc123
+ogham breaking --against git:main
+ogham breaking --against git:v1.0.0
 
 # Compare against a local directory
-ogham check breaking --against ./previous-schemas/
+ogham breaking --against ./previous-schemas/
 
-# Compare against a published version from registry/proxy
-ogham check breaking --against github.com/org/schemas@v1.0.0
+# Flags
+ogham breaking --against git:main --allow    # only ERROR blocks
+ogham breaking --against git:main --force    # nothing blocks
 ```
-
-### Flags
 
 | Flag | Description |
 |------|-------------|
 | (none) | ERROR and WARNING block. INFO logged. |
 | `--allow` | Only ERROR blocks. WARNING and INFO logged. |
 | `--force` | Nothing blocks. Everything logged. |
+
+### Integrated into generate
+
+Breaking checks can run automatically before code generation. Configure in `ogham.mod.yaml`:
+
+```yaml
+module: github.com/myteam/myproject
+version: 0.1.0
+
+breaking:
+  against: git:main     # reference to compare against
+  policy: warn           # warn | error | off
+```
+
+| Policy | Behavior |
+|--------|----------|
+| `off` | No breaking check |
+| `warn` | Show violations, continue with generation |
+| `error` | Block generation if ERROR or WARNING violations found |
+| *(no breaking section)* | No breaking check (default) |
+
+Override with CLI flag:
+
+```bash
+ogham generate --skip-breaking    # skip check regardless of policy
+```
+
+Graceful degradation — generation is never blocked by infrastructure issues:
+
+- No `ogham.mod.yaml` → skip
+- Git ref not found → warning, skip
+- Old schemas fail to compile → warning, skip
+
+### Recommended CI setup
+
+```yaml
+# .github/workflows/ogham.yml
+- name: Check breaking changes
+  run: ogham breaking --against git:main
+
+- name: Generate code
+  run: ogham generate
+```
+
+Or use the integrated check with `policy: error` for a single command:
+
+```yaml
+# ogham.mod.yaml
+breaking:
+  against: git:main
+  policy: error
+```
+
+```yaml
+# CI — one command does both
+- name: Generate (with breaking check)
+  run: ogham generate
+```
+
+### Error codes
+
+| Code | Level | What |
+|------|-------|------|
+| B001 | ERROR | Type removed |
+| B002 | INFO | Type added |
+| B010 | ERROR | Field removed |
+| B011 | INFO | Field added |
+| B012 | WARNING | Field renamed (same number) |
+| B013 | ERROR | Field wire type changed |
+| B014 | ERROR | Field singular ↔ repeated |
+| B015 | WARNING | Field optional ↔ required |
+| B016 | ERROR | Field number changed |
+| B020 | ERROR | Oneof removed |
+| B021 | ERROR | Oneof field removed |
+| B030 | ERROR | Enum removed |
+| B031 | INFO | Enum added |
+| B032 | ERROR | Enum value removed |
+| B033 | INFO | Enum value added |
+| B034 | WARNING | Enum value renamed |
+| B040 | ERROR | Service removed |
+| B041 | WARNING | RPC removed |
+| B042 | INFO | RPC added |
+| B043 | ERROR | RPC input type changed |
+| B044 | ERROR | RPC output type changed |
+| B045 | ERROR | RPC streaming modifier changed |
 
 ### What is compared
 
@@ -121,7 +202,7 @@ When a field number is reserved with `@reserved(N)`:
 Ogham does not prescribe a versioning strategy, but recommends:
 
 1. **Use semver for published schemas.** Major version bump for ERROR-level changes, minor for WARNING-level, patch for INFO-level.
-2. **Run `ogham check breaking` in CI.** Compare against the latest published version or the main branch.
+2. **Run `ogham breaking` in CI.** Compare against the latest published version or the main branch.
 3. **Never reuse field numbers.** Use `@reserved` when removing fields.
 4. **Never delete enum values.** Use `@removed(fallback=...)` instead.
 5. **Add fields with new numbers at the end.** Don't insert into gaps in the numbering.

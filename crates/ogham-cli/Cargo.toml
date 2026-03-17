@@ -20,3 +20,6 @@ clap = { version = "4", features = ["derive"] }
 ogham-compiler = { path = "../ogham-compiler" }
 ogham-proto = { path = "../ogham-proto" }
 prost = { version = "0.14", features = ["derive"] }
+tonic = { version = "0.14", features = ["transport"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+serde_json = "1.0.149"

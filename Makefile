@@ -27,5 +27,20 @@ clippy: # Run clippy for all workspace crates
 test: # Run all workspace tests
 	cargo test --workspace
 
+.PHONY: build
+build: # Build all binaries into ./bin/
+	cargo build --release
+	@mkdir -p bin
+	@cp target/release/ogham bin/ 2>/dev/null || true
+	@cp target/release/ogham-gen-proto bin/ 2>/dev/null || true
+	@echo "Binaries:"
+	@ls -lh bin/
+
+.PHONY: install
+install: build # Build and copy binaries to $$OGHAM_BIN or ~/.ogham/bin
+	@mkdir -p $${OGHAM_BIN:-$$HOME/.ogham/bin}
+	@cp bin/* $${OGHAM_BIN:-$$HOME/.ogham/bin}/
+	@echo "Installed to $${OGHAM_BIN:-$$HOME/.ogham/bin}"
+
 .PHONY: ci
 ci: fmt clippy test # Run formatting, lints, and tests

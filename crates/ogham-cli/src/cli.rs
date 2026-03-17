@@ -19,17 +19,14 @@ pub enum Commands {
     /// Generate code from Ogham schemas using plugins from ogham.gen.yaml
     Generate(GenerateArgs),
 
-    /// Check schemas for issues
-    Check {
-        #[command(subcommand)]
-        command: CheckCommands,
-    },
+    /// Validate schemas — compile without running plugins
+    Check(CheckArgs),
 
-    /// Protocol buffer operations
-    Proto {
-        #[command(subcommand)]
-        command: ProtoCommands,
-    },
+    /// Detect breaking changes against a reference
+    Breaking(BreakingArgs),
+
+    /// Dump compiled IR as JSON (debug)
+    Dump(DumpArgs),
 
     /// Add a dependency to ogham.mod.yaml
     Get(GetArgs),
@@ -43,26 +40,16 @@ pub enum Commands {
     /// Copy dependencies into vendor/
     Vendor,
 
-    /// Initialize a new Ogham project or plugin
-    Init(InitArgs),
-
-    /// Serve a plugin as gRPC server
-    Serve(ServeArgs),
-}
-
-#[derive(Subcommand)]
-pub enum CheckCommands {
-    /// Check for breaking changes against a reference
-    Breaking(BreakingArgs),
-}
-
-#[derive(Subcommand)]
-pub enum ProtoCommands {
-    /// Export .proto files from .ogham schemas
-    Export(ProtoExportArgs),
 }
 
 // ── Command args ───────────────────────────────────────────────────────
+
+#[derive(Args)]
+pub struct CheckArgs {
+    /// Project root directory
+    #[arg(short, long, default_value = ".")]
+    pub dir: PathBuf,
+}
 
 #[derive(Args)]
 pub struct GenerateArgs {
@@ -73,6 +60,10 @@ pub struct GenerateArgs {
     /// Project root directory (default: current directory)
     #[arg(short, long, default_value = ".")]
     pub dir: PathBuf,
+
+    /// Skip breaking change check even if configured in ogham.mod.yaml
+    #[arg(long)]
+    pub skip_breaking: bool,
 }
 
 #[derive(Args)]
@@ -91,13 +82,14 @@ pub struct BreakingArgs {
 }
 
 #[derive(Args)]
-pub struct ProtoExportArgs {
-    /// Output directory for .proto files
-    pub output_dir: PathBuf,
-
+pub struct DumpArgs {
     /// Project root directory
     #[arg(short, long, default_value = ".")]
     pub dir: PathBuf,
+
+    /// Output file (default: stdout)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -106,24 +98,3 @@ pub struct GetArgs {
     pub dependency: String,
 }
 
-#[derive(Args)]
-pub struct InitArgs {
-    /// Initialize as a plugin project
-    #[arg(long)]
-    pub plugin: Option<String>,
-
-    /// Project directory (default: current directory)
-    #[arg(default_value = ".")]
-    pub dir: PathBuf,
-}
-
-#[derive(Args)]
-pub struct ServeArgs {
-    /// Plugin to serve
-    #[arg(long)]
-    pub plugin: String,
-
-    /// Address to listen on
-    #[arg(long, default_value = ":50051")]
-    pub address: String,
-}

@@ -1,0 +1,18 @@
+[package]
+name = "oghamgen"
+description = "Ogham Plugin SDK for Rust — build code generation plugins for the Ogham schema language"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+keywords = ["ogham", "schema", "codegen", "plugin", "sdk"]
+categories = ["development-tools", "code-generators"]
+
+[dependencies]
+ogham-proto = { path = "../ogham-proto" }
+prost = { version = "0.14", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

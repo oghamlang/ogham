@@ -11,7 +11,8 @@ ogham/
 │   ├── ogham-compiler/      # Lexer (logos), parser (rowan), type checker, linter, AST → IR lowering
 │   ├── ogham-core/          # Shared types and utilities
 │   ├── ogham-lsp/           # Language Server Protocol implementation (tower-lsp)
-│   ├── ogham-plugin-sdk/    # Rust Plugin SDK (ogham-plugin-sdk crate)
+│   ├── oghamgen/            # Rust Plugin SDK (oghamgen crate)
+│   ├── ogham-gen-proto/     # Plugin: export .proto files from .ogham schemas
 │   └── ogham-proto/         # Generated Rust code from proto/ (prost/tonic)
 │
 ├── proto/                   # Protobuf definitions — source of truth for IR
@@ -53,9 +54,12 @@ ogham/
 │   │   └── wire.md          # Wire formats and serialization
 │   └── repository.md        # ← this file
 │
+├── examples/
+│   └── store/               # Example: online store schemas (5 files, 3 services, 12 RPCs)
+│
 ├── Cargo.toml               # Workspace manifest
 ├── Cargo.lock
-├── Makefile                  # Build commands (proto, check, fmt, clippy, test, ci)
+├── Makefile                  # Build: make build (→ bin/), make test, make ci
 ├── AGENTS.md                # Agent workflow and code style guidelines
 ├── LICENSE
 └── .gitignore
@@ -69,7 +73,7 @@ Logos lexer, hand-written recursive-descent parser producing a lossless CST (row
 
 ### CLI (`crates/ogham-cli`)
 
-The `ogham` binary. Package management (`get`, `install`, `update`, `vendor`), code generation (`generate`), proto export, breaking change detection, plugin scaffolding. See [adr/cmd.md](adr/cmd.md).
+The `ogham` binary. Schema validation (`check`), code generation (`generate`), package management (`get`, `install`, `update`, `vendor`), breaking change detection (`breaking`), IR debug dump (`dump`). See [adr/cmd.md](adr/cmd.md).
 
 ### LSP (`crates/ogham-lsp`)
 
@@ -89,9 +93,13 @@ Regenerate after changing `.proto` files:
 make proto
 ```
 
-### Rust Plugin SDK (`crates/ogham-plugin-sdk`)
+### Rust Plugin SDK (`crates/oghamgen`)
 
-Part of the Cargo workspace. Depends on `ogham-proto` for IR types, adds the plugin runner and code generation utilities. Published as `ogham-plugin-sdk` on crates.io.
+Part of the Cargo workspace. Depends on `ogham-proto` for IR types, adds the plugin runner (`run()`) and code generation utilities (`CodeWriter`, case converters). Published as `oghamgen` on crates.io.
+
+### Proto Export Plugin (`crates/ogham-gen-proto`)
+
+Built-in plugin that generates `.proto3` files from Ogham schemas. Uses the `oghamgen` SDK — serves as a reference implementation for plugin authors. Run via `ogham generate --plugin=proto`.
 
 ### Go Plugin SDK (`go/oghamgen`)
 
@@ -105,7 +113,7 @@ npm package with its own `package.json`. Published as `@ogham/oghamgen`. IR type
 
 | Directory | Published as | Language |
 |-----------|-------------|----------|
-| `crates/ogham-plugin-sdk` | `ogham-plugin-sdk` | Rust |
+| `crates/oghamgen` | `oghamgen` | Rust |
 | `go/oghamgen` | `github.com/oghamlang/ogham/go/oghamgen` | Go |
 | `ts/oghamgen` | `@ogham/oghamgen` | TypeScript |
 

@@ -1,0 +1,19 @@
+[package]
+name = "ogham-gen-proto"
+description = "Ogham plugin — export .proto files from Ogham schemas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+keywords = ["ogham", "protobuf", "codegen", "plugin"]
+categories = ["development-tools", "code-generators"]
+
+[[bin]]
+name = "ogham-gen-proto"
+path = "src/main.rs"
+
+[dependencies]
+oghamgen = { path = "../oghamgen" }
