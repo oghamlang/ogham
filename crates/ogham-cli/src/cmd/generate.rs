@@ -22,15 +22,13 @@ pub fn run(args: GenerateArgs) -> Result<(), String> {
     // Compile
     let result = pipeline::compile(&sources);
 
-    // Report diagnostics
-    for d in result.diagnostics.all() {
-        let prefix = match d.severity {
-            ogham_compiler::diagnostics::Severity::Error => "error",
-            ogham_compiler::diagnostics::Severity::Warning => "warning",
-            ogham_compiler::diagnostics::Severity::Info => "info",
-        };
-        eprintln!("{}: {}: {}", prefix, d.file, d.message);
-    }
+    // Report diagnostics with source context
+    let source_pairs: Vec<(String, String)> = sources
+        .iter()
+        .map(|s| (s.name.clone(), s.content.clone()))
+        .collect();
+    ogham_compiler::diagnostics::render_diagnostics(&result.diagnostics, &source_pairs);
+    ogham_compiler::diagnostics::render_summary(&result.diagnostics);
 
     if result.diagnostics.has_errors() {
         return Err("compilation failed".to_string());

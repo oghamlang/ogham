@@ -12,6 +12,7 @@ keywords = ["ogham", "schema", "compiler", "parser", "lexer"]
 categories = ["compilers", "parser-implementations"]
 
 [dependencies]
+codespan-reporting = "0.13.1"
 la-arena = "0.3.1"
 logos = "0.16"
 ogham-proto = { version = "0.1.0", path = "../ogham-proto" }

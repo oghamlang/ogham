@@ -166,6 +166,22 @@ impl<'s> Parser<'s> {
         }
     }
 
+    /// Save current position for progress checking.
+    fn save_pos(&self) -> usize {
+        self.pos
+    }
+
+    /// If no tokens were consumed since `saved`, force-consume one in an Error node.
+    /// Returns `true` if the parser was stuck (and we force-advanced).
+    fn check_progress(&mut self, saved: usize) -> bool {
+        if self.pos == saved && self.current().is_some() {
+            self.error_recover("unexpected token");
+            true
+        } else {
+            false
+        }
+    }
+
     /// Wrap the current token in an Error node and advance.
     fn error_recover(&mut self, msg: &str) {
         let offset = self.current_offset();
@@ -199,6 +215,7 @@ impl<'s> Parser<'s> {
             if self.current().is_none() {
                 break;
             }
+            let saved = self.save_pos();
             match self.current_non_trivia() {
                 Some(KwImport) => self.parse_import_decl(),
                 Some(KwType) | Some(At) | Some(KwAnnotation) | Some(KwShape)
@@ -206,6 +223,7 @@ impl<'s> Parser<'s> {
                 None => break,
                 _ => self.error_recover("expected top-level declaration"),
             }
+            self.check_progress(saved);
         }
 
         self.eat_trivia();
@@ -332,22 +350,20 @@ impl<'s> Parser<'s> {
 
         loop {
             self.eat_trivia();
+            let saved = self.save_pos();
             match self.current_non_trivia() {
                 Some(RBrace) | None => break,
                 Some(At) => {
-                    // Could be annotation on field, oneof, nested type/enum, or @reserved
                     self.parse_type_member();
                 }
                 Some(KwOneof) => self.parse_oneof_decl(),
                 Some(KwType) => self.parse_nested_type_decl(),
                 Some(KwEnum) => self.parse_nested_enum_decl(),
                 _ => {
-                    // Could be field_decl or shape_injection.
-                    // Distinguish: shape_injection is `Ident(N..M)`.
-                    // field_decl starts with a type_ref then ident then `=`.
                     self.parse_field_or_shape_injection();
                 }
             }
+            self.check_progress(saved);
         }
 
         self.expect(RBrace);
@@ -489,6 +505,7 @@ impl<'s> Parser<'s> {
 
         loop {
             self.eat_trivia();
+            let saved = self.save_pos();
             match self.current_non_trivia() {
                 Some(RBrace) | None => break,
                 Some(At) => {
@@ -499,6 +516,7 @@ impl<'s> Parser<'s> {
                 }
                 _ => self.parse_oneof_field(),
             }
+            self.check_progress(saved);
         }
 
         self.expect(RBrace);
@@ -557,10 +575,10 @@ impl<'s> Parser<'s> {
 
         loop {
             self.eat_trivia();
+            let saved = self.save_pos();
             match self.current_non_trivia() {
                 Some(RBrace) | None => break,
                 Some(At) => {
-                    // annotated shape field
                     while self.current_non_trivia() == Some(At) {
                         self.parse_annotation_call();
                     }
@@ -568,13 +586,10 @@ impl<'s> Parser<'s> {
                     self.parse_shape_field();
                 }
                 _ => {
-                    // Could be shape_field or shape_include.
-                    // shape_include: Ident [, Ident ...] ;
-                    // shape_field: type_ref ident ;
-                    // Distinguish: if after Ident we see `;` or `,` -> include.
                     self.parse_shape_member();
                 }
             }
+            self.check_progress(saved);
         }
 
         self.expect(RBrace);
@@ -642,6 +657,7 @@ impl<'s> Parser<'s> {
 
         loop {
             self.eat_trivia();
+            let saved = self.save_pos();
             match self.current_non_trivia() {
                 Some(RBrace) | None => break,
                 Some(At) => {
@@ -653,6 +669,7 @@ impl<'s> Parser<'s> {
                 }
                 _ => self.parse_enum_value_decl(),
             }
+            self.check_progress(saved);
         }
 
         self.expect(RBrace);
@@ -682,6 +699,7 @@ impl<'s> Parser<'s> {
 
         loop {
             self.eat_trivia();
+            let saved = self.save_pos();
             match self.current_non_trivia() {
                 Some(RBrace) | None => break,
                 Some(At) => {
@@ -696,6 +714,7 @@ impl<'s> Parser<'s> {
                 Some(KwRpc) => self.parse_rpc_decl(),
                 _ => self.error_recover("expected 'rpc' declaration"),
             }
+            self.check_progress(saved);
         }
 
         self.expect(RBrace);
@@ -742,6 +761,7 @@ impl<'s> Parser<'s> {
         self.expect(LBrace);
         loop {
             self.eat_trivia();
+            let saved = self.save_pos();
             match self.current_non_trivia() {
                 Some(RBrace) | None => break,
                 Some(At) => {
@@ -752,6 +772,7 @@ impl<'s> Parser<'s> {
                 }
                 _ => self.parse_field_decl(),
             }
+            self.check_progress(saved);
         }
         self.expect(RBrace);
         self.builder.finish_node();
@@ -772,10 +793,12 @@ impl<'s> Parser<'s> {
 
         loop {
             self.eat_trivia();
+            let saved = self.save_pos();
             match self.current_non_trivia() {
                 Some(RBrace) | None => break,
                 _ => self.parse_annotation_member(),
             }
+            self.check_progress(saved);
         }
 
         self.expect(RBrace);
@@ -867,10 +890,12 @@ impl<'s> Parser<'s> {
         self.expect(LBrace);
         loop {
             self.eat_trivia();
+            let saved = self.save_pos();
             match self.current_non_trivia() {
                 Some(RBrace) | None => break,
                 _ => self.parse_annotation_member(),
             }
+            self.check_progress(saved);
         }
         self.expect(RBrace);
         self.builder.finish_node();
@@ -1774,5 +1799,61 @@ annotation Column for field {
             "parse errors: {:?}",
             result.errors
         );
+    }
+
+    // ── Hang prevention ────────────────────────────────────────────────
+
+    #[test]
+    fn no_hang_on_invalid_annotation_syntax() {
+        // This pseudo-syntax previously caused an infinite loop
+        let result = parse("@<library>::<name>() type T { string id = 1; }");
+        // Should produce errors but NOT hang
+        assert!(!result.errors.is_empty());
+        // Tree is still produced
+        assert_eq!(result.syntax().kind(), Root);
+    }
+
+    #[test]
+    fn no_hang_on_garbage_in_type_body() {
+        let result = parse("type T { ??? }");
+        assert!(!result.errors.is_empty());
+        assert_eq!(result.syntax().kind(), Root);
+    }
+
+    #[test]
+    fn no_hang_on_garbage_in_enum() {
+        let result = parse("enum E { ??? }");
+        assert!(!result.errors.is_empty());
+    }
+
+    #[test]
+    fn no_hang_on_garbage_in_service() {
+        let result = parse("service S { ??? }");
+        assert!(!result.errors.is_empty());
+    }
+
+    #[test]
+    fn no_hang_on_garbage_in_shape() {
+        let result = parse("shape S { ??? }");
+        assert!(!result.errors.is_empty());
+    }
+
+    #[test]
+    fn no_hang_on_garbage_in_annotation_def() {
+        let result = parse("annotation A for type { ??? }");
+        assert!(!result.errors.is_empty());
+    }
+
+    #[test]
+    fn no_hang_on_deeply_broken_file() {
+        let result = parse("@@ {{ }} << >> !! type { enum { oneof { @@ }}");
+        assert!(!result.errors.is_empty());
+    }
+
+    #[test]
+    fn no_hang_on_empty_braces_everywhere() {
+        let result = parse("type T {} enum E {} service S {} shape Sh {}");
+        // No hang, and these are actually valid (empty bodies)
+        assert_eq!(result.syntax().kind(), Root);
     }
 }
