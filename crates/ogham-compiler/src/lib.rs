@@ -7,6 +7,7 @@ pub mod ast;
 pub mod diagnostics;
 pub mod hir;
 pub mod index;
+pub mod manifest;
 pub mod resolve;
 pub mod stdlib;
 pub mod lower;

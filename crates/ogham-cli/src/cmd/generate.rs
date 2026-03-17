@@ -3,6 +3,7 @@
 use crate::cli::GenerateArgs;
 use ogham_compiler::ast::AstNode;
 use ogham_compiler::lower;
+use ogham_compiler::manifest;
 use ogham_compiler::pipeline::{self, SourceFile};
 use std::io::Write;
 use std::path::Path;
@@ -11,10 +12,19 @@ use std::process::{Command, Stdio};
 pub fn run(args: GenerateArgs) -> Result<(), String> {
     let dir = &args.dir;
 
-    // Discover .ogham files
-    let sources = discover_ogham_files(dir)?;
+    // Try to load ogham.mod.yaml (optional — we can compile without it)
+    let mod_file = manifest::load_mod_file(dir).ok();
+    if let Some(ref m) = mod_file {
+        eprintln!("module: {} v{}", m.module, m.version);
+    }
+
+    // Discover .ogham files — look in schemas/ subdir or project root
+    let schemas_dir = dir.join("schemas");
+    let search_dir = if schemas_dir.is_dir() { &schemas_dir } else { dir };
+
+    let sources = discover_ogham_files(search_dir)?;
     if sources.is_empty() {
-        return Err(format!("no .ogham files found in {}", dir.display()));
+        return Err(format!("no .ogham files found in {}", search_dir.display()));
     }
 
     eprintln!("compiling {} file(s)...", sources.len());
@@ -48,27 +58,93 @@ pub fn run(args: GenerateArgs) -> Result<(), String> {
 
     // Lower to IR
     let module = lower::inflate(&result.interner, &result.arenas, &result.symbols, &package);
-    let request = lower::build_request(module, env!("CARGO_PKG_VERSION"), Default::default(), ".");
-
-    // Serialize request
-    let request_bytes = {
-        use prost::Message;
-        let mut buf = Vec::new();
-        request.encode(&mut buf).map_err(|e| format!("failed to encode request: {}", e))?;
-        buf
-    };
+    let request_bytes = serialize_request(&module, &args)?;
 
     eprintln!("compiled successfully ({} bytes IR)", request_bytes.len());
 
-    // TODO: Read ogham.gen.yaml and run configured plugins
-    // For now, if --plugin is specified, try to run it
-    if let Some(plugin_name) = &args.plugin {
-        run_plugin(plugin_name, &request_bytes)?;
-    } else {
+    // Determine which plugins to run
+    let plugins = resolve_plugins(dir, &args)?;
+
+    if plugins.is_empty() {
         eprintln!("no plugins configured (use --plugin <name> or create ogham.gen.yaml)");
+        return Ok(());
+    }
+
+    // Run each plugin in order
+    for plugin in &plugins {
+        let out_dir = dir.join(&plugin.out);
+
+        // Encode request with plugin-specific output dir and options
+        let module_clone = lower::inflate(&result.interner, &result.arenas, &result.symbols, &package);
+        let req = lower::build_request(
+            module_clone,
+            env!("CARGO_PKG_VERSION"),
+            plugin.opts.clone(),
+            &out_dir.to_string_lossy(),
+        );
+        let request_with_out = {
+            use prost::Message;
+            let mut buf = Vec::new();
+            req.encode(&mut buf).map_err(|e| format!("encode error: {}", e))?;
+            buf
+        };
+
+        let plugin_name = plugin.name.as_deref()
+            .or(plugin.path.as_deref())
+            .unwrap_or("unknown");
+
+        run_plugin(plugin_name, plugin.path.as_deref(), &request_with_out)?;
     }
 
     Ok(())
+}
+
+fn serialize_request(
+    module: &ogham_proto::ogham::ir::Module,
+    _args: &GenerateArgs,
+) -> Result<Vec<u8>, String> {
+    use prost::Message;
+    let request = lower::build_request(
+        module.clone(),
+        env!("CARGO_PKG_VERSION"),
+        Default::default(),
+        ".",
+    );
+    let mut buf = Vec::new();
+    request.encode(&mut buf).map_err(|e| format!("failed to encode request: {}", e))?;
+    Ok(buf)
+}
+
+struct ResolvedPlugin {
+    name: Option<String>,
+    path: Option<String>,
+    out: String,
+    opts: std::collections::HashMap<String, String>,
+}
+
+fn resolve_plugins(dir: &Path, args: &GenerateArgs) -> Result<Vec<ResolvedPlugin>, String> {
+    // --plugin flag takes priority
+    if let Some(ref plugin_name) = args.plugin {
+        return Ok(vec![ResolvedPlugin {
+            name: Some(plugin_name.clone()),
+            path: None,
+            out: ".".to_string(),
+            opts: Default::default(),
+        }]);
+    }
+
+    // Try ogham.gen.yaml
+    match manifest::load_gen_file(dir) {
+        Ok(gen) => {
+            Ok(gen.generate.plugins.into_iter().map(|p| ResolvedPlugin {
+                name: p.name,
+                path: p.path,
+                out: p.out,
+                opts: p.opts,
+            }).collect())
+        }
+        Err(_) => Ok(Vec::new()),
+    }
 }
 
 fn discover_ogham_files(dir: &Path) -> Result<Vec<SourceFile>, String> {
@@ -90,9 +166,8 @@ fn discover_recursive(dir: &Path, sources: &mut Vec<SourceFile>) -> Result<(), S
         let path = entry.path();
 
         if path.is_dir() {
-            // Skip hidden dirs, vendor, node_modules, target
             let name = path.file_name().unwrap_or_default().to_string_lossy();
-            if name.starts_with('.') || name == "vendor" || name == "node_modules" || name == "target" {
+            if name.starts_with('.') || name == "vendor" || name == "node_modules" || name == "target" || name == "gen" {
                 continue;
             }
             discover_recursive(&path, sources)?;
@@ -109,12 +184,17 @@ fn discover_recursive(dir: &Path, sources: &mut Vec<SourceFile>) -> Result<(), S
     Ok(())
 }
 
-fn run_plugin(plugin: &str, request_bytes: &[u8]) -> Result<(), String> {
-    // Try to find plugin binary: ogham-gen-<name> in PATH or $OGHAM_BIN
-    let bin_name = if plugin.starts_with("ogham-gen-") {
-        plugin.to_string()
+fn run_plugin(name: &str, explicit_path: Option<&str>, request_bytes: &[u8]) -> Result<(), String> {
+    let bin_name = if let Some(path) = explicit_path {
+        path.to_string()
     } else {
-        format!("ogham-gen-{}", plugin)
+        // Extract last segment: github.com/org/ogham-gen-go → ogham-gen-go
+        let short = name.rsplit('/').next().unwrap_or(name);
+        if short.starts_with("ogham-gen-") {
+            short.to_string()
+        } else {
+            format!("ogham-gen-{}", short)
+        }
     };
 
     eprintln!("running plugin: {}", bin_name);
@@ -124,9 +204,8 @@ fn run_plugin(plugin: &str, request_bytes: &[u8]) -> Result<(), String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|e| format!("failed to start {}: {}", bin_name, e))?;
+        .map_err(|e| format!("failed to start {}: {} (is it installed?)", bin_name, e))?;
 
-    // Send request via stdin
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(request_bytes)
@@ -141,17 +220,14 @@ fn run_plugin(plugin: &str, request_bytes: &[u8]) -> Result<(), String> {
         return Err(format!("plugin {} exited with {}", bin_name, output.status));
     }
 
-    // Decode response
     use prost::Message;
     let response = ogham_proto::ogham::compiler::OghamCompileResponse::decode(output.stdout.as_slice())
         .map_err(|e| format!("failed to decode plugin response: {}", e))?;
 
-    // Report plugin errors
     for err in &response.errors {
         eprintln!("plugin {}: {}: {}", bin_name, err.severity, err.message);
     }
 
-    // Write generated files
     for file in &response.files {
         let path = Path::new(&file.name);
         if let Some(parent) = path.parent() {
@@ -160,7 +236,6 @@ fn run_plugin(plugin: &str, request_bytes: &[u8]) -> Result<(), String> {
         }
 
         if file.append {
-            use std::io::Write;
             let mut f = std::fs::OpenOptions::new()
                 .append(true)
                 .create(true)

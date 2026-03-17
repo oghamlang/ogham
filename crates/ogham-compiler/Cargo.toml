@@ -17,4 +17,6 @@ la-arena = "0.3.1"
 logos = "0.16"
 ogham-proto = { version = "0.1.0", path = "../ogham-proto" }
 rowan = "0.15"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_yaml = "0.9.34"
 string-interner = "0.19.0"

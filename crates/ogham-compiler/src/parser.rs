@@ -429,19 +429,37 @@ impl<'s> Parser<'s> {
     }
 
     fn is_shape_injection(&self) -> bool {
-        // Shape injection: Ident `(` IntLiteral `..` IntLiteral `)`
-        // We check: current is Ident, next non-trivia is LParen
-        let t0 = self.peek_non_trivia(0);
-        let t1 = self.peek_non_trivia(1);
-        t0 == Some(Ident) && t1 == Some(LParen)
-            && self.peek_non_trivia(2) == Some(IntLiteral)
-            && self.peek_non_trivia(3) == Some(DotDot)
+        // Shape injection patterns:
+        //   Ident(N..M)                 — simple: MyShape(1..4)
+        //   Ident.Ident(N..M)           — qualified: rpc.PageRequest(1..2)
+        //   Ident.Ident.Ident(N..M)     — deep qualified
+        // We scan forward through Ident.Ident... until we find `(` followed by IntLiteral and `..`
+        let mut i = 0;
+        loop {
+            let t = self.peek_non_trivia(i);
+            if t != Some(Ident) && !t.map(is_keyword).unwrap_or(false) {
+                return false;
+            }
+            i += 1;
+            let next = self.peek_non_trivia(i);
+            if next == Some(Dot) {
+                i += 1; // skip dot, continue to next ident
+                continue;
+            }
+            if next == Some(LParen) {
+                // Check: ( IntLiteral .. IntLiteral )
+                return self.peek_non_trivia(i + 1) == Some(IntLiteral)
+                    && self.peek_non_trivia(i + 2) == Some(DotDot);
+            }
+            return false;
+        }
     }
 
     fn parse_shape_injection(&mut self) {
         self.builder.start_node(ShapeInjection.into());
         self.eat_trivia();
-        self.bump(); // shape name (Ident)
+        // Parse qualified shape name: Ident or Ident.Ident.Ident...
+        self.parse_qualified_name();
         self.expect(LParen);
         self.eat_trivia();
         self.expect_int(); // start
@@ -768,9 +786,9 @@ impl<'s> Parser<'s> {
                     while self.current_non_trivia() == Some(At) {
                         self.parse_annotation_call();
                     }
-                    self.parse_field_decl();
+                    self.parse_field_or_shape_injection();
                 }
-                _ => self.parse_field_decl(),
+                _ => self.parse_field_or_shape_injection(),
             }
             self.check_progress(saved);
         }

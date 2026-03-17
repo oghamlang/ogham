@@ -388,7 +388,7 @@ fn resolve_type_ref(
         let rest = &segments[1..];
         let type_name = rest.last().unwrap();
 
-        // Check imports
+        // Check imports (first segment = import alias)
         if let Some(import_path) = imports.get(first) {
             let full = format!("{}.{}", import_path, type_name);
             let full_sym = interner.intern(&full);
@@ -400,11 +400,22 @@ fn resolve_type_ref(
             }
         }
 
-        // Try as fully qualified
+        // Try as fully qualified name
         let full = segments.join(".");
         let full_sym = interner.intern(&full);
         if let Some(id) = symbols.types.get(&full_sym) {
             return ResolvedType::Message(*id);
+        }
+
+        // Cross-package: try "pkg_alias.TypeName" as a full name key
+        // This matches types registered as "uuid.UUID", "time.Timestamp", etc.
+        let cross_key = format!("{}.{}", first, type_name);
+        let cross_sym = interner.intern(&cross_key);
+        if let Some(id) = symbols.types.get(&cross_sym) {
+            return ResolvedType::Message(*id);
+        }
+        if let Some(id) = symbols.enums.get(&cross_sym) {
+            return ResolvedType::Enum(*id);
         }
 
         let dotted = segments.join(".");
@@ -538,6 +549,7 @@ pub fn expand_shapes(
         range_start: u32,
         range_end: u32,
         insert_position: usize,
+        pkg: String,
     }
 
     let mut injections: Vec<Injection> = Vec::new();
@@ -559,10 +571,10 @@ pub fn expand_shapes(
 
             if let Some(body) = type_decl.body() {
                 for (i, inj) in body.shape_injections().iter().enumerate() {
-                    let shape_name = match inj.name() {
-                        Some(t) => t.text().to_string(),
-                        None => continue,
-                    };
+                    let shape_name = inj.full_name();
+                    if shape_name.is_empty() {
+                        continue;
+                    }
                     let start = inj.range_start().unwrap_or(0);
                     let end = inj.range_end().unwrap_or(0);
 
@@ -572,6 +584,7 @@ pub fn expand_shapes(
                         range_start: start,
                         range_end: end,
                         insert_position: i,
+                        pkg: pkg.to_string(),
                     });
                 }
             }
@@ -585,16 +598,17 @@ pub fn expand_shapes(
             None => continue,
         };
 
-        // Find shape by short name in same package or qualified
-        let pkg = {
-            let full = interner.resolve(inj.type_full_name);
-            full.rsplit_once('.').map(|(p, _)| p.to_string()).unwrap_or_default()
-        };
-        let shape_full = format!("{}.{}", pkg, inj.shape_name);
-        let shape_full_sym = interner.intern(&shape_full);
+        // Find shape: try same package first, then by qualified name
+        let shape_id = resolve_shape_name(
+            &inj.shape_name,
+            &inj.pkg,
+            interner,
+            arenas,
+            symbols,
+        );
 
-        let shape_id = match symbols.shapes.get(&shape_full_sym) {
-            Some(id) => *id,
+        let shape_id = match shape_id {
+            Some(id) => id,
             None => {
                 diag.error("", 0..0, format!("unresolved shape: {}", inj.shape_name));
                 continue;
@@ -651,6 +665,48 @@ pub fn expand_shapes(
             fields.insert(pos + i, f);
         }
     }
+}
+
+/// Resolve a shape name — handles both simple ("MyShape") and qualified ("rpc.PageRequest").
+fn resolve_shape_name(
+    name: &str,
+    current_pkg: &str,
+    interner: &mut Interner,
+    arenas: &Arenas,
+    symbols: &SymbolTable,
+) -> Option<ShapeId> {
+    // If qualified (contains '.'), first segment is package alias
+    if let Some(dot_pos) = name.find('.') {
+        let pkg_alias = &name[..dot_pos];
+        let shape_name = &name[dot_pos + 1..];
+
+        // Scan all shapes — match by short name and package name
+        for (id, shape) in arenas.shapes.iter() {
+            let sname = interner.resolve(shape.name).to_string();
+            let sfull = interner.resolve(shape.full_name).to_string();
+            let spkg = sfull.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+            if sname == shape_name && spkg == pkg_alias {
+                return Some(id);
+            }
+        }
+        return None;
+    }
+
+    // Simple name — look in same package
+    let full = format!("{}.{}", current_pkg, name);
+    let full_sym = interner.intern(&full);
+    if let Some(id) = symbols.shapes.get(&full_sym) {
+        return Some(*id);
+    }
+
+    // Try by short name across all shapes
+    for (id, shape) in arenas.shapes.iter() {
+        if interner.resolve(shape.name) == name {
+            return Some(id);
+        }
+    }
+
+    None
 }
 
 /// Recursively expand a shape's fields, including nested shape includes.

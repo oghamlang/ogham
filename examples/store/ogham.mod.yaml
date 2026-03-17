@@ -1,0 +1,7 @@
+module: github.com/oghamlang/examples/store
+version: 0.1.0
+ogham: ">= 0.1.0"
+description: Example online store schemas
+
+require:
+  github.com/oghamlang/std: ^0.1.0

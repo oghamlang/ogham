@@ -1,0 +1,6 @@
+generate:
+  plugins:
+    - name: github.com/oghamlang/ogham-gen-go
+      out: gen/go/
+    - name: github.com/oghamlang/ogham-gen-ts
+      out: gen/ts/

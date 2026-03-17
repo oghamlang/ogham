@@ -410,9 +410,23 @@ impl ShapeInclude {
 ast_node!(ShapeInjection, ShapeInjection);
 
 impl ShapeInjection {
-    /// Shape name being injected.
+    /// Shape name being injected (simple: "MyShape" or qualified: "rpc.PageRequest").
     pub fn name(&self) -> Option<SyntaxToken> {
         first_ident_token(&self.syntax)
+    }
+
+    /// Qualified shape name (e.g., "rpc.PageRequest" or just "MyShape").
+    pub fn qualified_name(&self) -> Option<QualifiedName> {
+        first_child_of_type(&self.syntax)
+    }
+
+    /// Full shape name as string, including package qualifier.
+    pub fn full_name(&self) -> String {
+        self.qualified_name()
+            .map(|qn| qn.text())
+            .unwrap_or_else(|| {
+                self.name().map(|t| t.text().to_string()).unwrap_or_default()
+            })
     }
 
     /// Range start.
@@ -585,6 +599,10 @@ ast_node!(InlineType, InlineType);
 
 impl InlineType {
     pub fn fields(&self) -> Vec<FieldDecl> {
+        children_of_type(&self.syntax)
+    }
+
+    pub fn shape_injections(&self) -> Vec<ShapeInjection> {
         children_of_type(&self.syntax)
     }
 }
@@ -1049,7 +1067,7 @@ mod tests {
         let body = root.type_decls()[0].body().unwrap();
         let injections = body.shape_injections();
         assert_eq!(injections.len(), 1);
-        assert_eq!(injections[0].name().unwrap().text(), "MyShape");
+        assert_eq!(injections[0].full_name(), "MyShape");
         assert_eq!(injections[0].range_start(), Some(1));
         assert_eq!(injections[0].range_end(), Some(4));
     }

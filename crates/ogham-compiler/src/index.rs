@@ -102,11 +102,39 @@ pub fn collect(
                 None => continue,
             };
             let val_number = val.value().unwrap_or(0) as i32;
+
+            // Check for @removed(fallback=X) annotation
+            let mut is_removed = false;
+            let mut fallback: Option<Sym> = None;
+            for ann in val.annotations() {
+                if let Some(builtin) = ann.builtin_name() {
+                    if builtin.text() == "removed" {
+                        is_removed = true;
+                        // Extract fallback value from args
+                        if let Some(args) = ann.args() {
+                            for arg in args.args() {
+                                if let Some(name_tok) = arg.name() {
+                                    if name_tok.text() == "fallback" {
+                                        // Value is an identifier (enum value name)
+                                        if let Some(val_node) = arg.value() {
+                                            let text = val_node.syntax().text().to_string().trim().to_string();
+                                            if !text.is_empty() {
+                                                fallback = Some(interner.intern(&text));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             values.push(hir::EnumValueDef {
                 name: interner.intern(&val_name),
                 number: val_number,
-                is_removed: false,
-                fallback: None,
+                is_removed,
+                fallback,
                 annotations: Vec::new(),
                 loc: make_loc(file_sym, val.syntax()),
             });
