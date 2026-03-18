@@ -780,44 +780,149 @@ Ogham is fully protobuf-compatible: any `.ogham` schema can be compiled into a v
 | `enum` | `enum` |
 | `shape` | Expanded into `message` fields |
 | `Pick<T, ...>` / `Omit<T, ...>` | New `message` with a field subset |
-| `type` with `<-` (projection) | New `message` with mapping metadata in `OghamAnnotation` |
+| `type` with `<-` (projection) | New `message` (mapping metadata available via IR, not in proto) |
 | `oneof` | `oneof` |
 | `service` | `service` |
 | `rpc` | `rpc` |
 | `void` | `google.protobuf.Empty` |
 
-### Annotations -> OghamAnnotation
+### Annotations → Proto Extensions
 
-All annotations are serialized via a single `OghamAnnotation` extension backed by `google.protobuf.Struct`:
+Each annotation definition generates a **typed proto message and extension** — not a generic bag of key-values. This gives full protobuf type safety, IDE autocompletion in proto consumers, and binary-compatible wire format.
 
-```protobuf
-// ogham/options.proto — part of ogham std
-import "google/protobuf/descriptor.proto";
-import "google/protobuf/struct.proto";
+#### How it works
 
-message OghamAnnotation {
-    string name = 1;                     // "database::Table"
-    google.protobuf.Struct params = 2;   // { "table_name": "users" }
-}
+For each annotation definition, the compiler generates:
+1. A **message** with the annotation's parameters as typed fields
+2. An **extend** on the corresponding `google.protobuf.*Options` type
 
-extend google.protobuf.MessageOptions   { repeated OghamAnnotation ogham = 50000; }
-extend google.protobuf.FieldOptions     { repeated OghamAnnotation ogham = 50001; }
-extend google.protobuf.OneofOptions     { repeated OghamAnnotation ogham = 50002; }
-extend google.protobuf.EnumOptions      { repeated OghamAnnotation ogham = 50003; }
-extend google.protobuf.EnumValueOptions { repeated OghamAnnotation ogham = 50004; }
-extend google.protobuf.ServiceOptions   { repeated OghamAnnotation ogham = 50005; }
-extend google.protobuf.MethodOptions    { repeated OghamAnnotation ogham = 50006; }
-```
+The extension field number is deterministically assigned from the annotation's fully qualified name (hash-based, in the `50000–99999` range reserved for ogham).
 
-No numbering is needed in annotation declarations: the compiler validates types and `Struct` is used as the transport format. Example:
+#### Example: custom annotation
 
 ```
 // Ogham source:
-@database::Table(table_name="users")
-type User { ... }
-
-// Generated .proto:
-message User {
-    option (ogham) = { name: "database::Table", params: { fields { key: "table_name" value { string_value: "users" } } } };
+annotation Table for type {
+    string table_name;
+    string schema = "public";
+    bool partitioned = false;
 }
 ```
+
+```protobuf
+// Generated options.proto:
+import "google/protobuf/descriptor.proto";
+
+message DatabaseTableOptions {
+    string table_name = 1;
+    string schema = 2;        // default: "public"
+    bool partitioned = 3;     // default: false
+}
+
+extend google.protobuf.MessageOptions {
+    optional DatabaseTableOptions database_table = 50142;  // deterministic from "database::Table"
+}
+```
+
+```protobuf
+// Usage in generated .proto:
+message User {
+    option (database_table) = {
+        table_name: "users"
+        schema: "logistics"
+        partitioned: true
+    };
+    // ...
+}
+```
+
+#### Example: overloaded annotation
+
+Overloaded annotations (same name, different type constraints) generate a single message with the **union** of all overloads' parameters. The compiler ensures only the correct subset is populated based on the matched overload.
+
+```
+// Ogham source:
+annotation Range for field(int32 | int64) {
+    int64? min;
+    int64? max;
+}
+
+annotation Range for field(float | double) {
+    double? min_float;
+    double? max_float;
+}
+```
+
+```protobuf
+// Generated:
+message ValidateRangeOptions {
+    optional int64 min = 1;
+    optional int64 max = 2;
+    optional double min_float = 3;
+    optional double max_float = 4;
+}
+
+extend google.protobuf.FieldOptions {
+    optional ValidateRangeOptions validate_range = 50271;
+}
+```
+
+#### Example: std/validate
+
+```protobuf
+// Generated from std/validate:
+message ValidateLengthOptions {
+    optional uint32 min = 1;
+    optional uint32 max = 2;
+    optional uint32 exact = 3;
+}
+
+message ValidatePatternOptions {
+    string pattern = 1;
+}
+
+message ValidateRangeOptions {
+    optional int64 min = 1;
+    optional int64 max = 2;
+    optional double min_float = 3;
+    optional double max_float = 4;
+    bool exclusive_min = 5;
+    bool exclusive_max = 6;
+}
+
+message ValidateItemsOptions {
+    optional uint32 min = 1;
+    optional uint32 max = 2;
+    bool unique = 3;
+}
+
+extend google.protobuf.FieldOptions {
+    optional ValidateLengthOptions validate_length = 50201;
+    optional ValidatePatternOptions validate_pattern = 50202;
+    optional ValidateRangeOptions validate_range = 50203;
+    optional ValidateItemsOptions validate_items = 50204;
+}
+```
+
+#### Target mapping
+
+| Annotation target | Proto extension point |
+|-------------------|----------------------|
+| `type` | `google.protobuf.MessageOptions` |
+| `field` | `google.protobuf.FieldOptions` |
+| `oneof` | `google.protobuf.OneofOptions` |
+| `oneof_field` | `google.protobuf.FieldOptions` |
+| `enum` | `google.protobuf.EnumOptions` |
+| `enum_value` | `google.protobuf.EnumValueOptions` |
+| `service` | `google.protobuf.ServiceOptions` |
+| `rpc` | `google.protobuf.MethodOptions` |
+| `shape` | `google.protobuf.MessageOptions` (propagates to injected message) |
+
+#### Extension number assignment
+
+Extension numbers are deterministically computed from the fully qualified annotation name using a stable hash (FNV-1a) mapped to the `50000–99999` range. This ensures:
+- Same annotation always gets the same number across compilations
+- No manual numbering needed in annotation definitions
+- No collisions within a project (hash space is sufficient for practical annotation counts)
+
+If a collision is detected, the compiler reports an error and suggests adding an explicit extension number override.

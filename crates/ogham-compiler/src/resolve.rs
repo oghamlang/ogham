@@ -3,6 +3,8 @@
 //! Takes populated HIR with `ResolvedType::Unresolved` references
 //! and resolves them to concrete types via the symbol table.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::ast::{self, AstNode};
 use crate::diagnostics::Diagnostics;
 use crate::hir::*;
@@ -295,6 +297,279 @@ pub fn resolve_rpcs(
             arenas.services[svc_id].annotations =
                 collect_annotation_calls(&svc_decl.annotations(), interner);
         }
+    }
+}
+
+// ── Import validation ──────────────────────────────────────────────────
+
+/// Validate that all imports resolve to known packages.
+pub fn validate_imports(
+    files: &[ParsedFile],
+    module_path: Option<&str>,
+    diag: &mut Diagnostics,
+) {
+    // Collect all known package names from compiled files
+    let known_packages: HashSet<String> = files.iter().map(|f| f.package.clone()).collect();
+
+    for file in files {
+        let root = match ast::Root::cast(file.root.clone()) {
+            Some(r) => r,
+            None => continue,
+        };
+
+        // Check for import name collisions within each file
+        let mut seen: HashMap<String, String> = HashMap::new();
+        for imp in root.imports() {
+            let path_text = match imp.path() {
+                Some(p) => p.text(),
+                None => continue,
+            };
+            let short = if let Some(alias) = imp.alias() {
+                alias.text().to_string()
+            } else {
+                path_text.rsplit('/').next().unwrap_or(&path_text).to_string()
+            };
+
+            if let Some(existing_path) = seen.get(&short) {
+                if existing_path != &path_text {
+                    let range = imp.syntax().text_range();
+                    diag.error(
+                        &file.file_name,
+                        usize::from(range.start())..usize::from(range.end()),
+                        format!(
+                            "import name collision: '{}' already imported from '{}' — use an alias: import {} as <alias>;",
+                            short, existing_path, path_text
+                        ),
+                    );
+                }
+            }
+            seen.insert(short, path_text);
+        }
+
+        for imp in root.imports() {
+            let path_text = match imp.path() {
+                Some(p) => p.text(),
+                None => continue,
+            };
+
+            // Classify import
+            let is_std = path_text.starts_with("github.com/oghamlang/std/");
+            let is_local = module_path
+                .map(|mp| path_text.starts_with(mp))
+                .unwrap_or(false);
+
+            if is_std {
+                // Validate std import exists
+                if !crate::stdlib::is_std_import(&path_text) {
+                    let range = imp.syntax().text_range();
+                    diag.error(
+                        &file.file_name,
+                        usize::from(range.start())..usize::from(range.end()),
+                        format!("unknown standard library package: {}", path_text),
+                    );
+                }
+            } else if is_local {
+                // Validate local package exists
+                let short = path_text.rsplit('/').next().unwrap_or(&path_text);
+                if !known_packages.contains(short) {
+                    let range = imp.syntax().text_range();
+                    diag.error(
+                        &file.file_name,
+                        usize::from(range.start())..usize::from(range.end()),
+                        format!(
+                            "local package '{}' not found in module — available packages: {}",
+                            short,
+                            {
+                                let mut pkgs: Vec<_> = known_packages.iter().cloned().collect();
+                                pkgs.sort();
+                                pkgs.join(", ")
+                            }
+                        ),
+                    );
+                }
+            }
+            // External imports (not std, not local) — skip validation for now
+        }
+    }
+}
+
+// ── Unused import detection ────────────────────────────────────────────
+
+/// Warn about unused imports.
+pub fn check_unused_imports(
+    files: &[ParsedFile],
+    arenas: &Arenas,
+    interner: &Interner,
+    diag: &mut Diagnostics,
+) {
+    // Collect all package names that are actually referenced by types in the symbol table
+    let mut referenced_packages: HashSet<String> = HashSet::new();
+
+    for (_, ty) in arenas.types.iter() {
+        // Check field types for cross-package references
+        for field in &ty.fields {
+            collect_referenced_packages(&field.ty, arenas, interner, &mut referenced_packages);
+        }
+        for oneof in &ty.oneofs {
+            for field in &oneof.fields {
+                collect_referenced_packages(&field.ty, arenas, interner, &mut referenced_packages);
+            }
+        }
+        // Check annotations
+        for ann in &ty.annotations {
+            let lib = interner.resolve(ann.library);
+            if !lib.is_empty() {
+                referenced_packages.insert(lib.to_string());
+            }
+        }
+        for field in &ty.fields {
+            for ann in &field.annotations {
+                let lib = interner.resolve(ann.library);
+                if !lib.is_empty() {
+                    referenced_packages.insert(lib.to_string());
+                }
+            }
+        }
+    }
+    // Check service annotations and RPC types
+    for (_, svc) in arenas.services.iter() {
+        for ann in &svc.annotations {
+            let lib = interner.resolve(ann.library);
+            if !lib.is_empty() {
+                referenced_packages.insert(lib.to_string());
+            }
+        }
+        for rpc in &svc.rpcs {
+            collect_referenced_packages(&rpc.input.ty, arenas, interner, &mut referenced_packages);
+            collect_referenced_packages(&rpc.output.ty, arenas, interner, &mut referenced_packages);
+            for ann in &rpc.annotations {
+                let lib = interner.resolve(ann.library);
+                if !lib.is_empty() {
+                    referenced_packages.insert(lib.to_string());
+                }
+            }
+        }
+    }
+    // Check shape field types and shape references (injections)
+    for (_, shape) in arenas.shapes.iter() {
+        for field in &shape.fields {
+            collect_referenced_packages(&field.ty, arenas, interner, &mut referenced_packages);
+        }
+        // Shape package itself is referenced when injected
+        let full = interner.resolve(shape.full_name);
+        if let Some(pkg) = full.rsplit_once('.').map(|(p, _)| p) {
+            referenced_packages.insert(pkg.to_string());
+        }
+    }
+    // Check type field traces — shape injections reference shape packages
+    for (_, ty) in arenas.types.iter() {
+        for field in &ty.fields {
+            if let Some(trace) = &field.trace {
+                if let Some(origin) = &trace.shape {
+                    let sfull = interner.resolve(arenas.shapes[origin.shape_id].full_name);
+                    if let Some(pkg) = sfull.rsplit_once('.').map(|(p, _)| p) {
+                        referenced_packages.insert(pkg.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Also scan AST for qualified type references (e.g., uuid.UUID) to catch
+    // packages referenced through type aliases that expand to scalars.
+    for file in files {
+        let root = match ast::Root::cast(file.root.clone()) {
+            Some(r) => r,
+            None => continue,
+        };
+        collect_ast_referenced_packages(&root, &mut referenced_packages);
+    }
+
+    // Now check each file's imports against referenced packages
+    for file in files {
+        let root = match ast::Root::cast(file.root.clone()) {
+            Some(r) => r,
+            None => continue,
+        };
+
+        for imp in root.imports() {
+            let path_text = match imp.path() {
+                Some(p) => p.text(),
+                None => continue,
+            };
+            let short = path_text.rsplit('/').next().unwrap_or(&path_text);
+
+            // Skip checking imports for the file's own package
+            if short == file.package {
+                continue;
+            }
+
+            if !referenced_packages.contains(short) {
+                let range = imp.syntax().text_range();
+                diag.warning(
+                    &file.file_name,
+                    usize::from(range.start())..usize::from(range.end()),
+                    format!("unused import: {}", path_text),
+                );
+            }
+        }
+    }
+}
+
+/// Walk the AST tree and collect package prefixes from qualified names
+/// (e.g., `uuid.UUID` → adds `"uuid"`).
+fn collect_ast_referenced_packages(root: &ast::Root, packages: &mut HashSet<String>) {
+    // Walk all type references in the tree looking for qualified names.
+    // Extract first segment as package prefix — handles both Ident and keyword tokens
+    // (e.g., `rpc` is KwRpc keyword but valid as package name in `rpc.PageRequest`).
+    fn walk(node: &crate::syntax_kind::SyntaxNode, packages: &mut HashSet<String>) {
+        if let Some(qn) = ast::QualifiedName::cast(node.clone()) {
+            // Get ALL text tokens (idents + keywords) separated by dots
+            let all_segments: Vec<String> = qn.syntax()
+                .children_with_tokens()
+                .filter_map(|el| match el {
+                    rowan::NodeOrToken::Token(t) if t.kind() != crate::syntax_kind::SyntaxKind::Dot => {
+                        Some(t.text().to_string())
+                    }
+                    _ => None,
+                })
+                .collect();
+            if all_segments.len() > 1 {
+                packages.insert(all_segments[0].clone());
+            }
+        }
+        for child in node.children() {
+            walk(&child, packages);
+        }
+    }
+    walk(root.syntax(), packages);
+}
+
+fn collect_referenced_packages(
+    ty: &ResolvedType,
+    arenas: &Arenas,
+    interner: &Interner,
+    packages: &mut HashSet<String>,
+) {
+    match ty {
+        ResolvedType::Message(id) => {
+            let full = interner.resolve(arenas.types[*id].full_name);
+            if let Some(pkg) = full.rsplit_once('.').map(|(p, _)| p) {
+                packages.insert(pkg.to_string());
+            }
+        }
+        ResolvedType::Enum(id) => {
+            let full = interner.resolve(arenas.enums[*id].full_name);
+            if let Some(pkg) = full.rsplit_once('.').map(|(p, _)| p) {
+                packages.insert(pkg.to_string());
+            }
+        }
+        ResolvedType::Array(inner) => collect_referenced_packages(inner, arenas, interner, packages),
+        ResolvedType::Map { key, value } => {
+            collect_referenced_packages(key, arenas, interner, packages);
+            collect_referenced_packages(value, arenas, interner, packages);
+        }
+        _ => {}
     }
 }
 

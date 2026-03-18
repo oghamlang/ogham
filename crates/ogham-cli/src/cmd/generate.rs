@@ -4,7 +4,7 @@ use crate::cli::GenerateArgs;
 use ogham_compiler::ast::AstNode;
 use ogham_compiler::lower;
 use ogham_compiler::manifest;
-use ogham_compiler::pipeline::{self, SourceFile};
+use ogham_compiler::pipeline::{self, CompileOptions, SourceFile};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -41,7 +41,10 @@ pub fn compile_project(
 
     eprintln!("compiling {} file(s)...", sources.len());
 
-    let result = pipeline::compile(&sources);
+    let opts = CompileOptions {
+        module_path: mod_file.as_ref().map(|m| m.module.clone()),
+    };
+    let result = pipeline::compile(&sources, &opts);
 
     let source_pairs: Vec<(String, String)> = sources
         .iter()
@@ -161,7 +164,7 @@ fn run_breaking_check(
         }
     };
 
-    let old_result = ogham_compiler::pipeline::compile(&old_sources);
+    let old_result = ogham_compiler::pipeline::compile(&old_sources, &CompileOptions::default());
     if old_result.diagnostics.has_errors() {
         eprintln!("warning: breaking check skipped: old schemas failed to compile");
         return Ok(());

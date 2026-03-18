@@ -758,7 +758,7 @@ impl Backend {
                 name: uri.path().to_string(),
                 content: text.clone(),
             },
-        ]);
+        ], &ogham_compiler::pipeline::CompileOptions::default());
         for diag in semantic.diagnostics.all() {
             let severity = match diag.severity {
                 ogham_compiler::diagnostics::Severity::Error => DiagnosticSeverity::ERROR,

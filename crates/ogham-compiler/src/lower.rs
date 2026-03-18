@@ -411,7 +411,7 @@ mod tests {
         let result = pipeline::compile(&[pipeline::SourceFile {
             name: "test.ogham".to_string(),
             content: source.to_string(),
-        }]);
+        }], &pipeline::CompileOptions::default());
         assert!(
             !result.diagnostics.has_errors(),
             "errors: {:?}",

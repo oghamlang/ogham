@@ -22,8 +22,15 @@ pub struct SourceFile {
     pub content: String,
 }
 
+/// Options for compilation.
+#[derive(Debug, Default)]
+pub struct CompileOptions {
+    /// Module path from ogham.mod.yaml (e.g., "github.com/oghamlang/examples/golden")
+    pub module_path: Option<String>,
+}
+
 /// Compile a set of Ogham source files through the full pipeline.
-pub fn compile(sources: &[SourceFile]) -> CompileResult {
+pub fn compile(sources: &[SourceFile], opts: &CompileOptions) -> CompileResult {
     let mut interner = Interner::default();
     let mut arenas = Arenas::default();
     let mut symbols = SymbolTable::default();
@@ -46,11 +53,25 @@ pub fn compile(sources: &[SourceFile]) -> CompileResult {
             .and_then(|p| p.name().map(|t| t.text().to_string()))
             .unwrap_or_else(|| "default".to_string());
 
-        // Collect std imports from this file
+        // Validate and collect imports from this file
         if let Some(r) = ast::Root::cast(root.clone()) {
             for imp in r.imports() {
                 if let Some(path) = imp.path() {
                     let path_text = path.text();
+                    // Ban short-name imports (no / in path means bare name)
+                    if !path_text.contains('/') {
+                        diag.error(
+                            &source.name,
+                            {
+                                let r = imp.syntax().text_range();
+                                usize::from(r.start())..usize::from(r.end())
+                            },
+                            format!(
+                                "short name import '{}' is not allowed — use full module path (e.g., github.com/oghamlang/std/{})",
+                                path_text, path_text
+                            ),
+                        );
+                    }
                     if stdlib::is_std_import(&path_text) {
                         std_imports.push(path_text);
                     }
@@ -86,6 +107,9 @@ pub fn compile(sources: &[SourceFile]) -> CompileResult {
     for file in &files {
         index::collect(file, &mut interner, &mut arenas, &mut symbols, &mut diag);
     }
+
+    // Import validation
+    resolve::validate_imports(&files, opts.module_path.as_deref(), &mut diag);
 
     // Phase 2: Populate fields + resolve type references (Pass 3)
     resolve::populate_and_resolve(&files, &mut interner, &mut arenas, &symbols, &mut diag);
@@ -126,6 +150,9 @@ pub fn compile(sources: &[SourceFile]) -> CompileResult {
     // Pass 13: Back-references
     resolve::compute_back_references(&mut arenas);
 
+    // Unused import check
+    resolve::check_unused_imports(&files, &arenas, &interner, &mut diag);
+
     CompileResult {
         interner,
         arenas,
@@ -142,7 +169,7 @@ mod tests {
         compile(&[SourceFile {
             name: "test.ogham".to_string(),
             content: source.to_string(),
-        }])
+        }], &CompileOptions::default())
     }
 
     #[test]
@@ -197,7 +224,7 @@ type User { Address home = 1; []Address all = 2; }
                 name: "api.ogham".to_string(),
                 content: "package example;\nservice API { rpc Get(void) -> User; }".to_string(),
             },
-        ]);
+        ], &CompileOptions::default());
         assert!(!result.diagnostics.has_errors());
         assert_eq!(result.arenas.types.len(), 1);
         assert_eq!(result.arenas.services.len(), 1);
@@ -347,7 +374,7 @@ annotation Range for field(float | double) {
             SourceFile {
                 name: "model.ogham".to_string(),
                 content: r#"package example;
-import validate;
+import test/validate;
 type User {
     @validate::Range(min=1, max=100)
     int32 age = 1;
@@ -357,7 +384,7 @@ type User {
 }
 "#.to_string(),
             },
-        ]);
+        ], &CompileOptions { module_path: Some("test".to_string()) });
         assert!(!result.diagnostics.has_errors(), "errors: {:?}", result.diagnostics.all());
 
         // Check that annotations are linked to definitions
@@ -388,14 +415,14 @@ annotation Range for field(int32 | int64) {
             SourceFile {
                 name: "model.ogham".to_string(),
                 content: r#"package example;
-import validate;
+import test/validate;
 type User {
     @validate::Range(min=1)
     string name = 1;
 }
 "#.to_string(),
             },
-        ]);
+        ], &CompileOptions { module_path: Some("test".to_string()) });
         // Should have error: no overload of Range matches string
         assert!(result.diagnostics.has_errors());
     }
@@ -459,14 +486,14 @@ annotation Range for field(float | double) { double? min; }
             SourceFile {
                 name: "m.ogham".to_string(),
                 content: r#"package m;
-import v;
+import test/v;
 type T {
     @v::Range(min=1)
     string name = 1;
 }
 "#.to_string(),
             },
-        ]);
+        ], &CompileOptions { module_path: Some("test".to_string()) });
         assert!(result.diagnostics.has_errors(), "Range on string should be an error");
     }
 
@@ -483,14 +510,14 @@ annotation Range for field(float | double) { double? min; }
             SourceFile {
                 name: "m.ogham".to_string(),
                 content: r#"package m;
-import v;
+import test/v;
 type T {
     @v::Range(min=1)
     int32 age = 1;
 }
 "#.to_string(),
             },
-        ]);
+        ], &CompileOptions { module_path: Some("test".to_string()) });
         assert!(!result.diagnostics.has_errors(), "errors: {:?}", result.diagnostics.all());
     }
 
@@ -514,5 +541,47 @@ type Good {
 }
 "#);
         assert!(!result.diagnostics.has_errors(), "flat containers should be ok: {:?}", result.diagnostics.all());
+    }
+
+    #[test]
+    fn unused_import_warning() {
+        let result = compile_one(
+            "package example;\nimport github.com/oghamlang/std/uuid;\ntype T { string a = 1; }"
+        );
+        // uuid is imported but not used — should have a warning
+        let warnings: Vec<_> = result.diagnostics.all().iter()
+            .filter(|d| d.severity == crate::diagnostics::Severity::Warning)
+            .collect();
+        assert!(!warnings.is_empty(), "expected unused import warning");
+    }
+
+    #[test]
+    fn used_import_no_warning() {
+        let result = compile_one(
+            "package example;\nimport github.com/oghamlang/std/uuid;\ntype T { uuid.UUID id = 1; }"
+        );
+        let warnings: Vec<_> = result.diagnostics.all().iter()
+            .filter(|d| d.severity == crate::diagnostics::Severity::Warning)
+            .filter(|d| d.message.contains("unused"))
+            .collect();
+        assert!(warnings.is_empty(), "no unused import warning expected: {:?}", warnings);
+    }
+
+    #[test]
+    fn short_name_import_rejected() {
+        let result = compile_one("package example;\nimport uuid;\ntype T { string a = 1; }");
+        assert!(result.diagnostics.has_errors());
+    }
+
+    #[test]
+    fn full_path_std_import_ok() {
+        let result = compile_one("package example;\nimport github.com/oghamlang/std/uuid;\ntype T { uuid.UUID id = 1; }");
+        assert!(!result.diagnostics.has_errors(), "{:?}", result.diagnostics.all());
+    }
+
+    #[test]
+    fn unknown_std_import_error() {
+        let result = compile_one("package example;\nimport github.com/oghamlang/std/nonexistent;\ntype T { string a = 1; }");
+        assert!(result.diagnostics.has_errors());
     }
 }

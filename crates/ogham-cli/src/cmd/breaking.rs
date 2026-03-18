@@ -4,7 +4,7 @@ use crate::cli::BreakingArgs;
 use crate::cmd::generate::compile_project;
 use ogham_compiler::breaking::{self, Level};
 use ogham_compiler::lower;
-use ogham_compiler::pipeline::SourceFile;
+use ogham_compiler::pipeline::{CompileOptions, SourceFile};
 use std::path::Path;
 use std::process::Command;
 
@@ -15,7 +15,7 @@ pub fn run(args: BreakingArgs) -> Result<(), String> {
 
     // Load and compile old schemas
     let old_sources = load_reference(&args.against, dir)?;
-    let old_result = ogham_compiler::pipeline::compile(&old_sources);
+    let old_result = ogham_compiler::pipeline::compile(&old_sources, &CompileOptions::default());
 
     if old_result.diagnostics.has_errors() {
         return Err(format!(
